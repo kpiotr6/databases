@@ -38,6 +38,15 @@ create table country
   country_name varchar(255),
   constraint country_pk primary key ( country_id ) enable
 );
+create table log
+(
+	log_id int  generated always as identity not null,
+	reservation_id int not null,
+	log_date date  not null,
+	status char(1),
+	constraint log_pk primary key ( log_id ) enable
+);
+
 
 
 alter table reservation
@@ -55,16 +64,6 @@ add constraint reservation_chk1 check
 alter table trip
 add constraint reservation_fk3 foreign key
 ( country_id ) references country ( country_id ) enable;
-
-
-create table log
-(
-	log_id int  generated always as identity not null,
-	reservation_id int not null,
-	log_date date  not null,
-	status char(1),
-	constraint log_pk primary key ( log_id ) enable
-);
 
 alter table log
 add constraint log_chk1 check
@@ -166,32 +165,70 @@ insert into reservation(trip_id, person_id, status)
 values (3, 4, 'C');
 
 -- zad3
-CREATE OR REPLACE VIEW Reservations AS
-SELECT COUNTRY_NAME,TRIP_DATE,TRIP_NAME,FIRSTNAME,LASTNAME,r.RESERVATION_ID,l.STATUS,r.TRIP_ID,p.PERSON_ID
+CREATE OR REPLACE VIEW ReservationsIDs AS
+SELECT COUNTRY_NAME,TRIP_DATE,TRIP_NAME,FIRSTNAME,LASTNAME,r.RESERVATION_ID,STATUS,r.TRIP_ID,p.PERSON_ID
 FROM RESERVATION r
 LEFT JOIN PERSON p ON p.PERSON_ID = r.PERSON_ID
-LEFT JOIN LOG l ON l.RESERVATION_ID = r.RESERVATION_ID
 LEFT JOIN TRIP t ON t.TRIP_ID = r.TRIP_ID
 LEFT JOIN COUNTRY c ON t.COUNTRY_ID = c.COUNTRY_ID;
 
+CREATE OR REPLACE VIEW Reservations AS
+SELECT COUNTRY_NAME,TRIP_DATE,TRIP_NAME,FIRSTNAME,LASTNAME,RESERVATION_ID,STATUS
+FROM RESERVATIONSIDS;
+
 CREATE OR REPLACE  VIEW Trips AS
-SELECT DISTINCT COUNTRY_NAME,TRIP_DATE,TRIP_NAME,MAX_NO_PLACES,MAX_NO_PLACES - (SELECT COUNT(*) FROM RESERVATION) AS no_available_places
+SELECT DISTINCT COUNTRY_NAME,TRIP_DATE,TRIP_NAME,MAX_NO_PLACES,MAX_NO_PLACES - (SELECT COUNT(*) FROM RESERVATION r WHERE r.trip_id = t.trip_id ) AS no_available_places
 FROM TRIP t
-LEFT JOIN RESERVATION r ON r.TRIP_ID= t.TRIP_ID
 LEFT JOIN COUNTRY c ON c.country_id = t.country_id;
 
-CREATE VIEW AvailableTrips AS
-SELECT *
-FROM TRIPS t
-WHERE t.no_available_places >0;
+CREATE OR REPLACE VIEW AvailableTrips AS
+SELECT COUNTRY_NAME,TRIP_DATE,TRIP_NAME,MAX_NO_PLACES,MAX_NO_PLACES - (SELECT COUNT(*) FROM RESERVATION r WHERE r.trip_id = t.trip_id ) AS no_available_places
+FROM TRIP t
+LEFT JOIN COUNTRY c ON c.country_id = t.country_id
+LEFT JOIN reservation r2 on t.trip_id = r2.trip_id
+WHERE MAX_NO_PLACES - (SELECT COUNT(*) FROM RESERVATION r WHERE r.trip_id = t.trip_id ) > 0 AND r2.status != 'C';
+
+
+SELECT * FROM AvailableTrips;
 
 --zad4
 CREATE OR REPLACE TYPE tr AS OBJECT(
-    COUNTRY_NAME VARCHAR(255),
+    COUNTRY_NAME VARCHAR2(255),
     TRIP_DATE DATE,
-    TRIP_NAME VARCHAR(255),
-    FIRSTNAME VARCHAR(255),
-    LASTNAME VARCHAR(255),
+    TRIP_NAME VARCHAR2(255),
+    FIRSTNAME VARCHAR2(255),
+    LASTNAME VARCHAR2(255),
+    RESERVATION_ID INT,
+    STATUS char(1)
+                        );
+CREATE OR REPLACE TYPE tr_array AS TABLE OF tr;
+-- DROP FUNCTION PERSONRESERVATIONS
+
+CREATE OR REPLACE FUNCTION FTripParticipants(tripid INT)
+RETURN tr_array
+AS
+    result tr_array;
+    valid INT;
+BEGIN
+    SELECT count(*) INTO valid
+    FROM TRIP
+    WHERE TRIP.trip_id=tripid;
+    IF valid = 0 THEN
+        raise_application_error(-20001, 'Trip not found');
+    END IF;
+    SELECT tr(r.COUNTRY_NAME,r.TRIP_DATE,r.TRIP_NAME,r.FIRSTNAME,r.LASTNAME,r.RESERVATION_ID,r.STATUS) BULK COLLECT
+    INTO result
+    FROM reservationsIDS r
+    WHERE r.TRIP_ID = tripid;
+    RETURN result;
+END;
+
+CREATE OR REPLACE TYPE tr AS OBJECT(
+    COUNTRY_NAME VARCHAR2(255),
+    TRIP_DATE DATE,
+    TRIP_NAME VARCHAR2(255),
+    FIRSTNAME VARCHAR2(255),
+    LASTNAME VARCHAR2(255),
     RESERVATION_ID INT,
     STATUS char(1),
     TRIP_ID INT,
@@ -199,53 +236,60 @@ CREATE OR REPLACE TYPE tr AS OBJECT(
                         );
 CREATE OR REPLACE TYPE tr_array AS TABLE OF tr;
 
-CREATE OR REPLACE FUNCTION TripParticipants(trip_id INT)
+SELECT * from FTripParticipants(1);
+
+CREATE OR REPLACE FUNCTION FPersonReservations(personid INT)
 RETURN tr_array
 AS
     result tr_array;
+    valid INT;
 BEGIN
-    SELECT tr_array(r.COUNTRY_NAME,r.TRIP_DATE,r.TRIP_NAME,r.FIRSTNAME,r.LASTNAME,r.RESERVATION_ID,r.STATUS,r.TRIP_ID,r.PERSON_ID) bulk collect
+    SELECT count(*) INTO valid
+    FROM PERSON
+    WHERE PERSON.person_id=personid;
+    IF valid = 0 THEN
+        raise_application_error(-20001, 'Trip not found');
+    END IF;
+    SELECT tr(r.COUNTRY_NAME,r.TRIP_DATE,r.TRIP_NAME,r.FIRSTNAME,r.LASTNAME,r.RESERVATION_ID,r.STATUS) bulk collect
     INTO result
-    FROM reservations r
-    WHERE r.TRIP_ID = trip_id;
+    FROM reservationsIDS r
+    WHERE r.PERSON_ID = personid;
     RETURN result;
 END;
 
-CREATE OR REPLACE FUNCTION PersonReservations(person_id INT)
-RETURN tr_array
-AS
-    result tr_array;
-BEGIN
-    SELECT tr_array(r.COUNTRY_NAME,r.TRIP_DATE,r.TRIP_NAME,r.FIRSTNAME,r.LASTNAME,r.RESERVATION_ID,r.STATUS,r.TRIP_ID,r.PERSON_ID) bulk collect
-    INTO result
-    FROM reservations r
-    WHERE r.PERSON_ID = person_id;
-    RETURN result;
-END;
-
+SELECT * from FPersonReservations(1);
 
 CREATE OR REPLACE TYPE av AS OBJECT(
     COUNTRY_NAME VARCHAR(255),
     TRIP_DATE DATE,
-    TRIP_NAME DATE,
+    TRIP_NAME VARCHAR(255),
     MAX_NO_PLACES INT,
     NO_AVAILABLE_PLACES INT
                         );
 CREATE OR REPLACE TYPE av_array AS TABLE OF av;
 
-CREATE OR REPLACE FUNCTION AvailableTripsF(country VARCHAR(255),date_from DATE, date_to DATE)
+CREATE OR REPLACE FUNCTION FAvailableTrips(country VARCHAR,date_from DATE, date_to DATE)
 RETURN av_array
 AS
     result av_array;
+    valid INT;
 BEGIN
-    SELECT av_array() bulk collect
+    SELECT COUNT(*) INTO valid
+    FROM COUNTRY c
+    WHERE c.COUNTRY_NAME = country;
+    IF valid = 0 THEN
+        raise_application_error(-20001, 'Country not found');
+    END IF;
+    IF date_from > date_to THEN
+        raise_application_error(-20001, 'Date_from is later than date_to');
+    END IF;
+    SELECT av(t.COUNTRY_NAME,t.TRIP_DATE,t.TRIP_NAME,t.MAX_NO_PLACES,t.no_available_places) bulk collect
     INTO result
     FROM trips t
-    WHERE t.COUNTRY_NAME = country AND date_from <= t.TRIP_DATE AND date_to <= t.TRIP_DATE AND t.NO_AVAILABLE_PLACES >0;
+    WHERE t.COUNTRY_NAME = country AND date_from <= t.TRIP_DATE AND date_to >= t.TRIP_DATE AND t.NO_AVAILABLE_PLACES > 0;
     RETURN result;
 END;
 
-SELECT *
-FROM PERSONRESERVATIONS(1)
+SELECT * FROM FAvailableTrips('Polska','09-03-2003','09-03-2030');
 
-ALTER USER BD_410744 IDENTIFIED BY MyNewPassword123;
+--zad5
